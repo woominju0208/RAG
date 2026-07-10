@@ -81,6 +81,28 @@ def _render_node(elem: ET.Element) -> str:
     return combined
 
 
+_CEO_LABEL_RE = re.compile(r"대\s*표\s*(?:이\s*사|자\s*명|자)\s*(?:명)?\s*:\s*\|?\s*([^\n|]+)")
+_CEO_SIGNATURE_RE = re.compile(r"대표이사\s+([가-힣]{2,4})(?:\s|$)")
+
+
+def _extract_ceo_name(sections: list[tuple[list[str], str]]) -> str:
+    """대표이사 이름은 문서 형식에 따라 위치가 다르다.
+    - 사업보고서/반기보고서류: 표지 표에 '대표이사 : 이름' 형태로 있다. 공동대표인 경우
+      '최낙현, 강호성'처럼 콤마로 여러 명이 나오기도 해서 그 줄 전체를 잡는다.
+    - 감사보고서(재무제표 첨부)류: 표지엔 없고, 본문의 재무제표 책임 확인 문구에
+      '회사명 대표이사 이름' 서명 형태로만 나온다.
+    두 형태를 문서 전체에서 순서대로 찾아본다."""
+    for _, text in sections:
+        match = _CEO_LABEL_RE.search(text)
+        if match:
+            return match.group(1).strip()
+    for _, text in sections:
+        match = _CEO_SIGNATURE_RE.search(text)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def _walk_section(elem: ET.Element, breadcrumb: list[str], out: list[tuple[list[str], str]]) -> None:
     title_elem = elem.find("TITLE")
     title = _render_text(title_elem) if title_elem is not None else ""
@@ -120,6 +142,21 @@ def parse_dart_xml(path: Path) -> list[Document]:
     doc_type = _render_text(doc_name_elem) if doc_name_elem is not None else ""
     company = _render_text(company_elem) if company_elem is not None else ""
 
+    # 표지의 PERIODFROM/PERIODTO(AUNITVALUE=YYYYMMDD)가 그 파일이 다루는 회계기간이다.
+    # 청크마다 어떤 사업연도 자료인지 표시가 없으면, 검색된 청크만 보고는 몇 년도 것인지
+    # 알 수 없어 LLM이 연도를 추측하다 틀리는 문제가 있었다.
+    period_from_elem = root.find(".//TU[@AUNIT='PERIODFROM']")
+    period_to_elem = root.find(".//TU[@AUNIT='PERIODTO']")
+    fiscal_period = ""
+    if period_from_elem is not None and period_to_elem is not None:
+        from_value = period_from_elem.get("AUNITVALUE", "")
+        to_value = period_to_elem.get("AUNITVALUE", "")
+        if len(from_value) == 8 and len(to_value) == 8:
+            fiscal_period = (
+                f"{from_value[:4]}.{from_value[4:6]}.{from_value[6:]}"
+                f"~{to_value[:4]}.{to_value[4:6]}.{to_value[6:]}"
+            )
+
     body = root.find("BODY")
     if body is None:
         return []
@@ -130,6 +167,8 @@ def parse_dart_xml(path: Path) -> list[Document]:
             sections.append((["표지"], _render_node(child)))
         elif SECTION_RE.match(child.tag):
             _walk_section(child, [], sections)
+
+    ceo_name = _extract_ceo_name(sections)
 
     documents = []
     for breadcrumb, text in sections:
@@ -142,6 +181,8 @@ def parse_dart_xml(path: Path) -> list[Document]:
                     "source": path.name,
                     "company": company,
                     "doc_type": doc_type,
+                    "fiscal_period": fiscal_period,
+                    "ceo_name": ceo_name,
                     "section": " > ".join(breadcrumb),
                 },
             )

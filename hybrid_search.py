@@ -44,15 +44,31 @@ def _get_company_index() -> dict[str, list[str]]:
     return _company_index
 
 
-def _detect_company_filter(question: str) -> dict | None:
+def _match_company_keys(question: str) -> list[str]:
     normalized_q = re.sub(r"\s+", "", question)
-    matched_variants = []
-    for key, variants in _get_company_index().items():
-        if key and key in normalized_q:
-            matched_variants.extend(variants)
-    if not matched_variants:
+    return [key for key in _get_company_index() if key and key in normalized_q]
+
+
+def _detect_company_filter(question: str) -> dict | None:
+    keys = _match_company_keys(question)
+    if not keys:
         return None
+    matched_variants = []
+    for key in keys:
+        matched_variants.extend(_get_company_index()[key])
     return {"company": {"$in": matched_variants}}
+
+
+def _strip_company_mentions(question: str) -> str:
+    """회사 필터를 이미 적용했으면, 검색 문장에 회사명이 남아있을 때 BM25/벡터 점수가
+    회사명 반복 횟수에 좌우되어 정작 찾는 키워드(예: 매출실적)가 밀리는 문제가 있다.
+    필터링된 범위 안에서는 회사명이 더 이상 구분 신호가 아니므로 검색 문장에서 뺀다."""
+    keys = _match_company_keys(question)
+    stripped = question
+    for key in keys:
+        stripped = stripped.replace(key, " ")
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped or question
 
 
 def _get_bm25_retriever(company_filter: dict | None) -> BM25Retriever | None:
@@ -85,21 +101,34 @@ def _doc_key(doc: Document) -> tuple:
 
 def hybrid_search(question: str, k: int = 5, pool: int = 15, rrf_k: int = 60) -> list[Document]:
     """벡터(의미) 검색과 BM25(키워드) 검색 결과를 RRF(Reciprocal Rank Fusion)로 합친다.
-    질문에 저장된 회사명이 언급되면 그 회사의 청크로 먼저 범위를 좁힌 뒤 검색한다."""
-    company_filter = _detect_company_filter(question)
+    질문에 저장된 회사명이 언급되면 그 회사의 청크로 먼저 범위를 좁힌 뒤 검색한다.
 
-    vector_docs = vectorstore.similarity_search(question, k=pool, filter=company_filter)
+    회사 필터가 걸리면 검색어를 회사명 포함/제외 두 버전으로 만들어 둘 다 검색한다.
+    회사명을 빼면 "매출실적"처럼 회사명이 반복 언급되는 청크에 밀리던 키워드가 잘 잡히지만,
+    남는 검색어가 "대표이사"처럼 너무 짧고 흔한 단어면 오히려 회사명이 실제로 적힌 정답 청크
+    (예: 재무제표 서명란의 "삼양애니팜 대표이사 민필홍")보다 회사명 없이 그 단어만 반복되는
+    엉뚱한 청크가 더 유사하다고 나오는 역효과가 있다. 두 버전을 다 검색해서 합치면 어느 한쪽만
+    잡아내는 경우도 살아남는다."""
+    company_filter = _detect_company_filter(question)
+    search_texts = [question]
+    if company_filter:
+        stripped = _strip_company_mentions(question)
+        if stripped != question:
+            search_texts.append(stripped)
 
     bm25_retriever = _get_bm25_retriever(company_filter)
-    if bm25_retriever is None:
-        bm25_docs = []
-    else:
+    if bm25_retriever is not None:
         bm25_retriever.k = pool
-        bm25_docs = bm25_retriever.invoke(question)
+
+    ranked_lists = []
+    for text in search_texts:
+        ranked_lists.append(vectorstore.similarity_search(text, k=pool, filter=company_filter))
+        if bm25_retriever is not None:
+            ranked_lists.append(bm25_retriever.invoke(text))
 
     scores: dict[tuple, float] = {}
     doc_by_key: dict[tuple, Document] = {}
-    for ranked_docs in (vector_docs, bm25_docs):
+    for ranked_docs in ranked_lists:
         for rank, doc in enumerate(ranked_docs):
             key = _doc_key(doc)
             scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank)
