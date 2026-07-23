@@ -13,7 +13,10 @@ CHAT_MODEL = "gpt-4o-mini"
 api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
 embeddings = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key)
-llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key)
+# temperature=0: 문서에서 사실을 뽑아 답하는 용도라 매번 같은 근거로 같은 답을 내야 한다.
+# 기본값(사실상 1.0)으로 두면 컨텍스트에 정답이 있어도 가끔 "모른다"고 답하는 등
+# 같은 질문에 답이 오락가락하는 문제가 있었다.
+llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key, temperature=0)
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
 

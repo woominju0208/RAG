@@ -18,7 +18,7 @@ def format_docs(docs) -> str:
     return "\n\n".join(parts)
 
 
-def ask(question: str, top_k: int = 5) -> str:
+def ask(question: str, top_k: int = 8) -> str:
     docs = hybrid_search(question, k=top_k)
 
     if not docs:

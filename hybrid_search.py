@@ -8,6 +8,15 @@ from rag_core import vectorstore
 _bm25_retriever: BM25Retriever | None = None
 _company_index: dict[str, list[str]] | None = None
 
+
+def reset_cache() -> None:
+    """ingest.py가 새 문서를 추가한 뒤 반드시 호출해야 한다. _company_index/_bm25_retriever는
+    한 번 빌드되면 재사용하는 모듈 전역 캐시라, 이걸 안 비우면 같은 프로세스(노트북 커널 등)
+    안에서는 새로 들어온 회사가 회사명 필터에 잡히지 않아 필터링이 조용히 깨진다."""
+    global _bm25_retriever, _company_index
+    _bm25_retriever = None
+    _company_index = None
+
 _CORP_SUFFIX_RE = re.compile(r"\(주\)|주식회사|\s+")
 
 
@@ -99,7 +108,7 @@ def _doc_key(doc: Document) -> tuple:
     return (doc.metadata.get("source"), doc.metadata.get("chunk_index"))
 
 
-def hybrid_search(question: str, k: int = 5, pool: int = 15, rrf_k: int = 60) -> list[Document]:
+def hybrid_search(question: str, k: int = 8, pool: int = 15, rrf_k: int = 60) -> list[Document]:
     """벡터(의미) 검색과 BM25(키워드) 검색 결과를 RRF(Reciprocal Rank Fusion)로 합친다.
     질문에 저장된 회사명이 언급되면 그 회사의 청크로 먼저 범위를 좁힌 뒤 검색한다.
 
@@ -135,4 +144,13 @@ def hybrid_search(question: str, k: int = 5, pool: int = 15, rrf_k: int = 60) ->
             doc_by_key[key] = doc
 
     ranked_keys = sorted(scores, key=lambda key: scores[key], reverse=True)
-    return [doc_by_key[key] for key in ranked_keys[:k]]
+    top_keys = ranked_keys[:k]
+
+    filter_desc = ", ".join(company_filter["company"]["$in"]) if company_filter else "없음"
+    print(f"[검색] '{question}' | 회사 필터: {filter_desc}")
+    for rank, key in enumerate(top_keys, start=1):
+        doc = doc_by_key[key]
+        source, chunk_index = key
+        print(f"  {rank}위 {source} #{chunk_index} (score {scores[key]:.4f}) | {doc.metadata.get('section')}")
+
+    return [doc_by_key[key] for key in top_keys]
