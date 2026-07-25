@@ -14,9 +14,9 @@ venv/
 # Vector store (로컬 임베딩 데이터)
 .chroma/
 
-# 원본 문서 (용량/민감정보 이슈로 커밋하지 않음)
-data/*
-!data/.gitkeep
+# 원본 문서. DART 공시 XML(data/dart_xml/)은 공개 자료라 배포 환경에서 자동 수집하려면
+# git에 커밋돼 있어야 한다 — 일반 텍스트(data/*.txt)만 계속 제외한다.
+data/*.txt
 
 # IDE
 .vscode/

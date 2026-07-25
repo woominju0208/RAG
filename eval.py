@@ -11,7 +11,7 @@ python eval.py 로 실행하면 EVAL_CASES를 순회하며
 CEO/계열회사 질문의 정답 키워드는 하드코딩하지 않고, 지금 vectorstore에 저장된
 ceo_name/affiliates metadata에서 직접 가져온다 — 이렇게 해야 재수집으로 데이터가
 바뀌어도 eval 스크립트를 따로 고칠 필요가 없다. 반면 매출실적/유동자산처럼 구조화된
-metadata 필드가 없는 숫자 질문은 "모른다류 응답이 아니면 일단 통과"로 보는 약한 검증만
+metadata 필드가 없는 숫자 질문은 "찾지 못했습니다류 응답이 아니면 일단 통과"로 보는 약한 검증만
 하며(expected_keywords를 채우면 정확 매칭으로 강화 가능), 이 한계는 결과 표에 표시한다.
 """
 
@@ -36,11 +36,11 @@ EVAL_CASES = [
     {"question": "삼양사 임원현황 알려줘", "type": "factual", "company": "삼양사"},
     {"question": "삼양애니팜 2025년 51기 유동자산 얼마야?", "type": "factual", "company": "삼양애니팜"},
     # 삼양데이타시스템은 corpus에 감사보고서만 있고 임원현황이 실린 사업/반기/분기보고서가 없어서,
-    # "모른다"가 지어내지 않고 정직하게 나오는지 보는 환각 방지 회귀 테스트로 남겨둔다.
+    # 지어내지 않고 "찾지 못했습니다"류 응답이 정직하게 나오는지 보는 환각 방지 회귀 테스트로 남겨둔다.
     {"question": "삼양데이타시스템 임원현황 알려줘", "type": "no_data", "company": "삼양데이타시스템"},
 ]
 
-_DONT_KNOW_MARKERS = ["모른다", "모릅니다", "알 수 없"]
+_DONT_KNOW_MARKERS = ["찾지 못했습니다"]
 
 
 def _company_variants(company: str) -> list[str]:
@@ -91,13 +91,13 @@ def grade_answer(case: dict, answer: str) -> tuple[bool, str]:
 
     if case["type"] == "no_data":
         ok = any(marker in answer for marker in _DONT_KNOW_MARKERS)
-        return ok, "corpus에 데이터가 없는 질문 — '모른다'류 응답이 나와야 정답(환각 방지 확인)"
+        return ok, "corpus에 데이터가 없는 질문 — '찾지 못했습니다'류 응답이 나와야 정답(환각 방지 확인)"
 
     if "expected_keywords" in case:
         return all(k in answer for k in case["expected_keywords"]), "expected_keywords 전부 포함(강한 검증)"
 
     ok = not any(marker in answer for marker in _DONT_KNOW_MARKERS)
-    return ok, "'모른다'류 응답이 아니면 통과(약한 검증 — 숫자 정확성은 직접 확인 필요)"
+    return ok, "'찾지 못했습니다'류 응답이 아니면 통과(약한 검증 — 숫자 정확성은 직접 확인 필요)"
 
 
 def main() -> None:

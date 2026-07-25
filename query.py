@@ -9,6 +9,14 @@ PROMPT = ChatPromptTemplate.from_template(
     "문서:\n{context}\n\n질문: {question}"
 )
 
+# "관련 내용을 찾지 못했습니다..."를 프롬프트에 직접 넣어 LLM이 그대로 말하게 시켰더니,
+# 문구가 길고 단정적이라 "모른다"만 시켰을 때보다 모델이 훨씬 쉽게 거부 판정을 내려서(예:
+# 감사참여자 표에 인원수/시간만 있고 사람 이름이 없는 경우), 데이터가 있는데도 못 찾는
+# 회귀가 생겼다. 그래서 판단 자체는 검증된 원래 지시("모른다")에 맡기고, 최종 출력 문구만
+# 여기서 치환한다 — 모델의 의사결정 경계는 그대로 두고 사용자에게 보이는 문구만 바꾸는 것.
+_NOT_FOUND_MESSAGE = "관련 내용을 찾지 못했습니다. 질문을 바꿔서 다시 문의해 주세요."
+_DONT_KNOW_MARKERS = ("모른다", "모릅니다")
+
 
 def format_docs(docs) -> str:
     # company/fiscal_period/section은 ingest.py가 청크 본문 맨 앞에 이미 붙여뒀으므로
@@ -33,7 +41,10 @@ def ask(question: str, top_k: int = 8) -> str:
             )
 
     chain = PROMPT | llm | StrOutputParser()
-    return chain.invoke({"context": format_docs(docs), "question": question})
+    answer = chain.invoke({"context": format_docs(docs), "question": question})
+    if any(marker in answer for marker in _DONT_KNOW_MARKERS):
+        return _NOT_FOUND_MESSAGE
+    return answer
 
 
 def main() -> None:
