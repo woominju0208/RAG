@@ -190,10 +190,20 @@ uvicorn api:app --host 0.0.0.0 --port 8001
 
 기존에는 `python ingest.py`를 터미널에서 수동으로 실행해야 데이터가 채워졌는데, 배포 환경에서는 터미널 접근 없이도 최초 배포 시 자동으로 채워지도록 `api.py`의 FastAPI `lifespan` 훅에서 처리합니다.
 
-### 배포 시 필요한 것 두 가지
+### Render 무료 플랜 배포 실패 문제와 해결 (`chroma_data/` 사전 빌드 커밋)
 
-1. **영구 볼륨에 `CHROMA_DIR` 지정** — Render/Railway/Fly.io 같은 PaaS는 컨테이너 파일시스템이 재배포마다 초기화되는 경우가 많습니다. `CHROMA_DIR` 환경변수를 플랫폼이 제공하는 영구 디스크/볼륨 경로로 지정해야, 재배포해도 임베딩을 다시 만들 필요가 없습니다. (안 하면 배포할 때마다 처음부터 다시 수집합니다.)
-2. **DART XML 원본이 배포 환경에 존재** — `data/dart_xml/`은 DART 공시(공개 자료)라 `.gitignore`에서 제외해 git에 커밋해뒀습니다(용량 약 118MB, 개별 파일 최대 7MB로 GitHub 제한 안에 들어옴). 배포 플랫폼이 git 저장소에서 빌드하므로 이 파일들이 코드와 함께 딸려갑니다. `data/*.txt`(일반 텍스트 문서)는 여전히 커밋하지 않습니다.
+Render 무료 플랜은 영구 디스크(Persistent Disk)를 지원하지 않아 컨테이너 파일시스템이 **배포마다** 초기화됩니다. `_ingest_if_empty()`가 `lifespan` 시작 훅에서 동기적으로 실행되는데, 벡터스토어가 매번 비어 있으니 매 배포마다 82개 DART XML 전체를 OpenAI로 재임베딩하게 되고, 이 작업이 Render의 포트 감지 제한 시간보다 오래 걸려 `No open ports detected` → `Exited with status 3`로 배포가 실패했습니다 (2026-07-30 확인).
+
+해결책: 로컬에서 미리 만들어둔 Chroma 벡터스토어(`~/.rag_project_chroma`)를 **Git LFS**로 레포의 `chroma_data/`에 커밋해뒀습니다. `chroma.sqlite3`(약 210MB)와 HNSW 인덱스 `.bin` 파일들은 GitHub의 100MB 단일 파일 제한을 넘기 때문에 일반 git이 아니라 LFS로 추적합니다(`.gitattributes` 참고). 이러면 Render가 git clone할 때 이미 채워진 벡터스토어가 함께 딸려오므로, 서버 기동 시 `count() > 0`이라 자동 수집을 완전히 건너뛰고 즉시 포트를 엽니다.
+
+**배포 시 필요한 것 두 가지**
+
+1. **`CHROMA_DIR`을 `chroma_data/`로 지정** — Render 환경변수에 `CHROMA_DIR=chroma_data`(레포 루트 기준 상대경로, 앱이 레포 루트에서 기동되므로)를 설정해야 커밋된 사전 빌드 데이터를 읽습니다. 설정 안 하면 기본값(`~/.rag_project_chroma`)을 보게 되어 다시 빈 스토어로 시작합니다.
+2. **DART XML 원본이 배포 환경에 존재** — `data/dart_xml/`은 DART 공시(공개 자료)라 `.gitignore`에서 제외해 git에 커밋해뒀습니다(용량 약 118MB, 개별 파일 최대 7MB로 GitHub 제한 안에 들어옴). `data/*.txt`(일반 텍스트 문서)는 여전히 커밋하지 않습니다. (자동 수집을 안 타는 한 이 데이터는 실제로는 쓰이지 않지만, 벡터스토어를 지우고 처음부터 다시 만들어야 할 때를 대비해 유지합니다.)
+
+**주의(Git LFS 대역폭)**: GitHub 무료 티어는 LFS 저장/대역폭이 월 1GB입니다. `chroma_data/`가 약 330MB라 Render가 배포마다 이걸 pull하면 한 달에 대략 3번 배포하면 무료 대역폭을 다 씁니다. 배포를 자주 한다면 LFS 데이터 팩 구매 또는 유료 플랜(영구 디스크)로 전환을 고려하세요. 또한 Render가 clone 시 LFS 스무징을 실제로 수행하는지(즉 `chroma_data/chroma.sqlite3`가 진짜 210MB 바이너리로 받아지는지, 아니면 LFS 포인터 텍스트 파일 그대로인지)는 첫 배포 로그에서 반드시 확인해야 합니다.
+
+**문서가 바뀌면**: `data/`에 파일을 추가/교체한 뒤 로컬에서 `python ingest.py`(또는 재수집이 필요하면 `chroma_data/`를 지우고) 다시 실행하고, 그 결과를 `chroma_data/`에 복사해 다시 커밋합니다.
 
 ### 자동 수집 동작 방식 (`api.py`의 `_ingest_if_empty()`)
 
