@@ -8,7 +8,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 EMBED_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-4o-mini"
+CHAT_MODEL = "gpt-5.6-luna"
 
 api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
